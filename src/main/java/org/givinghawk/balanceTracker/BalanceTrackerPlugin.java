@@ -4,7 +4,8 @@ import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
-import org.bukkit.command.CommandSender;
+import org.bukkit.command.CommandExecutor;
+import org.bukkit.command.PluginCommand;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.RegisteredServiceProvider;
@@ -58,9 +59,19 @@ public class BalanceTrackerPlugin extends JavaPlugin {
         startOnlineRecordingTask();
         startTopPlayersRecordingTask();
 
-        // Register command
-        getCommand("balancehistory").setExecutor(new BalanceHistoryCommand(databaseManager));
-        getCommand("baltop").setExecutor(new BalTopCommand(databaseManager, economy));
+        // Register commands safely
+        registerCommand("balancehistory", new BalanceHistoryCommand(databaseManager));
+        registerCommand("baltop", new BalTopCommand(databaseManager, economy));
+    }
+
+    private void registerCommand(String commandName, CommandExecutor executor) {
+        PluginCommand command = getCommand(commandName);
+        if (command != null) {
+            command.setExecutor(executor);
+            getLogger().info("Registered command: /" + commandName);
+        } else {
+            getLogger().severe("Failed to register command: /" + commandName + " - not defined in plugin.yml!");
+        }
     }
 
     @Override
@@ -103,11 +114,10 @@ public class BalanceTrackerPlugin extends JavaPlugin {
 
                 try {
                     double balance = economy.getBalance(player);
-                    // Create a final reference for use in lambda
-                    final OfflinePlayer finalPlayer = player;
-                    playerBalances.add(new PlayerBalance(player.getUniqueId(), balance, player.getName()));
+                    String playerName = player.getName() != null ? player.getName() : "Unknown";
+                    playerBalances.add(new PlayerBalance(player.getUniqueId(), balance, playerName));
                 } catch (Exception e) {
-                    getLogger().log(Level.WARNING, "Failed to get balance for " + player.getName(), e);
+                    getLogger().log(Level.WARNING, "Failed to get balance for player", e);
                 }
             }
 
@@ -283,7 +293,7 @@ class PlayerBalance {
     }
 }
 
-class BalanceHistoryCommand implements org.bukkit.command.CommandExecutor {
+class BalanceHistoryCommand implements CommandExecutor {
     private final DatabaseManager databaseManager;
 
     public BalanceHistoryCommand(DatabaseManager databaseManager) {
@@ -297,11 +307,10 @@ class BalanceHistoryCommand implements org.bukkit.command.CommandExecutor {
             return true;
         }
 
-        // Create final reference for lambda
         final String playerName = args[0];
         final CommandSender finalSender = sender;
 
-        Bukkit.getScheduler().runTaskAsynchronously((JavaPlugin) Bukkit.getPluginManager().getPlugin("BalanceTracker"), () -> {
+        Bukkit.getScheduler().runTaskAsynchronously(Bukkit.getPluginManager().getPlugin("BalanceTracker"), () -> {
             OfflinePlayer player = Bukkit.getOfflinePlayer(playerName);
             if (player == null || !player.hasPlayedBefore()) {
                 finalSender.sendMessage("§cPlayer not found: " + playerName);
@@ -341,7 +350,7 @@ class BalanceHistoryCommand implements org.bukkit.command.CommandExecutor {
     }
 }
 
-class BalTopCommand implements org.bukkit.command.CommandExecutor {
+class BalTopCommand implements CommandExecutor {
     private final DatabaseManager databaseManager;
     private final Economy economy;
 
@@ -363,11 +372,10 @@ class BalTopCommand implements org.bukkit.command.CommandExecutor {
             }
         }
 
-        // Create final reference for lambda
         final int finalLimit = limit;
         final CommandSender finalSender = sender;
 
-        Bukkit.getScheduler().runTaskAsynchronously((JavaPlugin) Bukkit.getPluginManager().getPlugin("BalanceTracker"), () -> {
+        Bukkit.getScheduler().runTaskAsynchronously(Bukkit.getPluginManager().getPlugin("BalanceTracker"), () -> {
             List<PlayerBalance> topBalances = databaseManager.getTopBalances(finalLimit);
 
             if (topBalances.isEmpty()) {
@@ -380,7 +388,7 @@ class BalTopCommand implements org.bukkit.command.CommandExecutor {
             for (int i = 0; i < topBalances.size(); i++) {
                 PlayerBalance pb = topBalances.get(i);
                 OfflinePlayer player = Bukkit.getOfflinePlayer(pb.getUuid());
-                String name = player.getName() != null ? player.getName() : pb.getUuid().toString();
+                String name = player.getName() != null ? player.getName() : pb.getUuid().toString().substring(0, 8) + "...";
                 topPlayers.add(String.format("§6%d. §e%s§f: §a$%,.2f",
                         i + 1, name, pb.getBalance()));
             }
