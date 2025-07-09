@@ -1,7 +1,12 @@
+# How often to record top players' balances (in seconds)
+topPlayersRecordInterval: 300
+
+# How many top players to record
+topPlayersCount: 100
+
 mysql:
   host: "localhost"
   port: 3306
   database: "minecraft"
   username: "user"
   password: "pass"
-balanceRecordInterval: 300 # seconds (5 minutes)

@@ -5,6 +5,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
+import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
@@ -13,18 +14,20 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.sql.*;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 import java.util.logging.Level;
 
 public class BalanceTrackerPlugin extends JavaPlugin {
 
     private Economy economy;
     private DatabaseManager databaseManager;
-    private BukkitTask onlineRecordingTask;
     private BukkitTask topPlayersRecordingTask;
-    private int recordInterval;
+    private BukkitTask purgeTask;
     private int topPlayersRecordInterval;
     private int topPlayersCount;
+    private final int purgeIntervalDays = 60; // 2 months
 
     @Override
     public void onEnable() {
@@ -51,17 +54,15 @@ public class BalanceTrackerPlugin extends JavaPlugin {
         }
 
         // Get configuration values
-        recordInterval = config.getInt("balanceRecordInterval", 300) * 20; // Convert to ticks
         topPlayersRecordInterval = config.getInt("topPlayersRecordInterval", 3600) * 20; // Default: 1 hour
         topPlayersCount = config.getInt("topPlayersCount", 100); // Default: top 100 players
 
-        // Schedule balance recording tasks
-        startOnlineRecordingTask();
+        // Schedule top players recording and purge tasks
         startTopPlayersRecordingTask();
+        startPurgeTask();
 
-        // Register commands safely
+        // Register command safely
         registerCommand("balancehistory", new BalanceHistoryCommand(databaseManager));
-        registerCommand("baltop", new BalTopCommand(databaseManager, economy));
     }
 
     private void registerCommand(String commandName, CommandExecutor executor) {
@@ -77,8 +78,8 @@ public class BalanceTrackerPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         // Cancel scheduled tasks
-        if (onlineRecordingTask != null) onlineRecordingTask.cancel();
         if (topPlayersRecordingTask != null) topPlayersRecordingTask.cancel();
+        if (purgeTask != null) purgeTask.cancel();
 
         // Close database connection
         if (databaseManager != null) databaseManager.close();
@@ -89,15 +90,6 @@ public class BalanceTrackerPlugin extends JavaPlugin {
         if (rsp == null) return false;
         economy = rsp.getProvider();
         return economy != null;
-    }
-
-    private void startOnlineRecordingTask() {
-        onlineRecordingTask = getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
-            for (Player player : Bukkit.getOnlinePlayers()) {
-                double balance = economy.getBalance(player);
-                databaseManager.recordBalance(player.getUniqueId(), balance);
-            }
-        }, recordInterval, recordInterval);
     }
 
     private void startTopPlayersRecordingTask() {
@@ -132,7 +124,18 @@ public class BalanceTrackerPlugin extends JavaPlugin {
             }
 
             getLogger().info("Recorded balances for top " + count + " players");
-        }, topPlayersRecordInterval, topPlayersRecordInterval);
+        }, 0, topPlayersRecordInterval); // Start immediately, then repeat
+    }
+
+    private void startPurgeTask() {
+        // Run purge daily at 4:00 AM
+        long ticksPerDay = 20 * 60 * 60 * 24;
+        long initialDelay = (long) (ticksPerDay * 0.16); // Approximately 4:00 AM
+
+        purgeTask = getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
+            getLogger().info("Purging old balance records (older than " + purgeIntervalDays + " days)");
+            databaseManager.purgeOldRecords(purgeIntervalDays);
+        }, initialDelay, ticksPerDay);
     }
 
     private static class PlayerBalance {
@@ -194,6 +197,19 @@ class DatabaseManager {
         }
     }
 
+    public void purgeOldRecords(int days) {
+        long cutoff = System.currentTimeMillis() - (days * 24L * 60 * 60 * 1000);
+        String sql = "DELETE FROM player_balances WHERE timestamp < ?";
+
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, cutoff);
+            int deleted = statement.executeUpdate();
+            Bukkit.getLogger().info("Purged " + deleted + " old balance records");
+        } catch (SQLException e) {
+            Bukkit.getLogger().log(Level.SEVERE, "Failed to purge old records", e);
+        }
+    }
+
     public List<BalanceRecord> getBalanceHistory(UUID playerUuid) {
         List<BalanceRecord> records = new ArrayList<>();
         String sql = "SELECT timestamp, balance FROM player_balances WHERE player_uuid = ? ORDER BY timestamp DESC LIMIT 100";
@@ -211,33 +227,6 @@ class DatabaseManager {
             Bukkit.getLogger().log(Level.SEVERE, "Failed to retrieve balance history for player: " + playerUuid, e);
         }
         return records;
-    }
-
-    public List<PlayerBalance> getTopBalances(int limit) {
-        List<PlayerBalance> topBalances = new ArrayList<>();
-        String sql = "SELECT p1.player_uuid, p1.balance " +
-                "FROM player_balances p1 " +
-                "INNER JOIN (" +
-                "    SELECT player_uuid, MAX(timestamp) AS max_timestamp " +
-                "    FROM player_balances " +
-                "    GROUP BY player_uuid" +
-                ") p2 ON p1.player_uuid = p2.player_uuid AND p1.timestamp = p2.max_timestamp " +
-                "ORDER BY p1.balance DESC " +
-                "LIMIT ?";
-
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setInt(1, limit);
-            try (ResultSet resultSet = statement.executeQuery()) {
-                while (resultSet.next()) {
-                    UUID uuid = UUID.fromString(resultSet.getString("player_uuid"));
-                    double balance = resultSet.getDouble("balance");
-                    topBalances.add(new PlayerBalance(uuid, balance, null));
-                }
-            }
-        } catch (SQLException e) {
-            Bukkit.getLogger().log(Level.SEVERE, "Failed to retrieve top balances", e);
-        }
-        return topBalances;
     }
 
     public void close() {
@@ -266,30 +255,6 @@ class BalanceRecord {
 
     public double getBalance() {
         return balance;
-    }
-}
-
-class PlayerBalance {
-    private final UUID uuid;
-    private final double balance;
-    private final String name;
-
-    public PlayerBalance(UUID uuid, double balance, String name) {
-        this.uuid = uuid;
-        this.balance = balance;
-        this.name = name;
-    }
-
-    public UUID getUuid() {
-        return uuid;
-    }
-
-    public double getBalance() {
-        return balance;
-    }
-
-    public String getName() {
-        return name;
     }
 }
 
@@ -344,57 +309,6 @@ class BalanceHistoryCommand implements CommandExecutor {
                 String time = new java.util.Date(record.getTimestamp()).toString();
                 finalSender.sendMessage("§7- §a" + time + "§f: §b$" + String.format("%.2f", record.getBalance()));
             }
-        });
-
-        return true;
-    }
-}
-
-class BalTopCommand implements CommandExecutor {
-    private final DatabaseManager databaseManager;
-    private final Economy economy;
-
-    public BalTopCommand(DatabaseManager databaseManager, Economy economy) {
-        this.databaseManager = databaseManager;
-        this.economy = economy;
-    }
-
-    @Override
-    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        int limit = 10;
-        if (args.length > 0) {
-            try {
-                limit = Integer.parseInt(args[0]);
-                limit = Math.min(Math.max(limit, 1), 100); // Clamp between 1 and 100
-            } catch (NumberFormatException e) {
-                sender.sendMessage("§cInvalid number: " + args[0]);
-                return true;
-            }
-        }
-
-        final int finalLimit = limit;
-        final CommandSender finalSender = sender;
-
-        Bukkit.getScheduler().runTaskAsynchronously(Bukkit.getPluginManager().getPlugin("BalanceTracker"), () -> {
-            List<PlayerBalance> topBalances = databaseManager.getTopBalances(finalLimit);
-
-            if (topBalances.isEmpty()) {
-                finalSender.sendMessage("§eNo balance data available");
-                return;
-            }
-
-            // Get player names
-            List<String> topPlayers = new ArrayList<>();
-            for (int i = 0; i < topBalances.size(); i++) {
-                PlayerBalance pb = topBalances.get(i);
-                OfflinePlayer player = Bukkit.getOfflinePlayer(pb.getUuid());
-                String name = player.getName() != null ? player.getName() : pb.getUuid().toString().substring(0, 8) + "...";
-                topPlayers.add(String.format("§6%d. §e%s§f: §a$%,.2f",
-                        i + 1, name, pb.getBalance()));
-            }
-
-            finalSender.sendMessage("§6=== Top " + finalLimit + " Richest Players ===");
-            topPlayers.forEach(finalSender::sendMessage);
         });
 
         return true;
