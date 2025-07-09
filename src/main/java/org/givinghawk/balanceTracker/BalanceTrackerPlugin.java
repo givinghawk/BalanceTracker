@@ -103,6 +103,8 @@ public class BalanceTrackerPlugin extends JavaPlugin {
 
                 try {
                     double balance = economy.getBalance(player);
+                    // Create a final reference for use in lambda
+                    final OfflinePlayer finalPlayer = player;
                     playerBalances.add(new PlayerBalance(player.getUniqueId(), balance, player.getName()));
                 } catch (Exception e) {
                     getLogger().log(Level.WARNING, "Failed to get balance for " + player.getName(), e);
@@ -295,11 +297,14 @@ class BalanceHistoryCommand implements org.bukkit.command.CommandExecutor {
             return true;
         }
 
-        String playerName = args[0];
+        // Create final reference for lambda
+        final String playerName = args[0];
+        final CommandSender finalSender = sender;
+
         Bukkit.getScheduler().runTaskAsynchronously((JavaPlugin) Bukkit.getPluginManager().getPlugin("BalanceTracker"), () -> {
             OfflinePlayer player = Bukkit.getOfflinePlayer(playerName);
             if (player == null || !player.hasPlayedBefore()) {
-                sender.sendMessage("§cPlayer not found: " + playerName);
+                finalSender.sendMessage("§cPlayer not found: " + playerName);
                 return;
             }
 
@@ -307,7 +312,7 @@ class BalanceHistoryCommand implements org.bukkit.command.CommandExecutor {
             List<BalanceRecord> records = databaseManager.getBalanceHistory(uuid);
 
             if (records.isEmpty()) {
-                sender.sendMessage("§eNo balance records found for " + playerName);
+                finalSender.sendMessage("§eNo balance records found for " + playerName);
                 return;
             }
 
@@ -325,10 +330,10 @@ class BalanceHistoryCommand implements org.bukkit.command.CommandExecutor {
             int endIndex = Math.min(filteredRecords.size(), 10);
             List<BalanceRecord> lastChanges = filteredRecords.subList(0, endIndex);
 
-            sender.sendMessage("§6Balance changes for §e" + playerName + "§6 (last " + endIndex + " changes):");
+            finalSender.sendMessage("§6Balance changes for §e" + playerName + "§6 (last " + endIndex + " changes):");
             for (BalanceRecord record : lastChanges) {
                 String time = new java.util.Date(record.getTimestamp()).toString();
-                sender.sendMessage("§7- §a" + time + "§f: §b$" + String.format("%.2f", record.getBalance()));
+                finalSender.sendMessage("§7- §a" + time + "§f: §b$" + String.format("%.2f", record.getBalance()));
             }
         });
 
@@ -358,11 +363,15 @@ class BalTopCommand implements org.bukkit.command.CommandExecutor {
             }
         }
 
+        // Create final reference for lambda
+        final int finalLimit = limit;
+        final CommandSender finalSender = sender;
+
         Bukkit.getScheduler().runTaskAsynchronously((JavaPlugin) Bukkit.getPluginManager().getPlugin("BalanceTracker"), () -> {
-            List<PlayerBalance> topBalances = databaseManager.getTopBalances(limit);
+            List<PlayerBalance> topBalances = databaseManager.getTopBalances(finalLimit);
 
             if (topBalances.isEmpty()) {
-                sender.sendMessage("§eNo balance data available");
+                finalSender.sendMessage("§eNo balance data available");
                 return;
             }
 
@@ -376,8 +385,8 @@ class BalTopCommand implements org.bukkit.command.CommandExecutor {
                         i + 1, name, pb.getBalance()));
             }
 
-            sender.sendMessage("§6=== Top " + limit + " Richest Players ===");
-            topPlayers.forEach(sender::sendMessage);
+            finalSender.sendMessage("§6=== Top " + finalLimit + " Richest Players ===");
+            topPlayers.forEach(finalSender::sendMessage);
         });
 
         return true;
