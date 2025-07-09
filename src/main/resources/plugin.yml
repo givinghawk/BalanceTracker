@@ -1,0 +1,9 @@
+name: BalanceTracker
+main: org.givinghawk.balanceTracker.BalanceTrackerPlugin
+version: 1.0
+api-version: "1.21"
+depend: [Vault]
+commands:
+  balancehistory:
+    description: View player's balance history
+    usage: /balancehistory <player>
