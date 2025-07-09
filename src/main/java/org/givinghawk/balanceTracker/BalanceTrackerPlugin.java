@@ -134,7 +134,7 @@ class DatabaseManager {
 
     public List<BalanceRecord> getBalanceHistory(UUID playerUuid) {
         List<BalanceRecord> records = new ArrayList<>();
-        String sql = "SELECT timestamp, balance FROM player_balances WHERE player_uuid = ? ORDER BY timestamp DESC LIMIT 10";
+        String sql = "SELECT timestamp, balance FROM player_balances WHERE player_uuid = ? ORDER BY timestamp DESC LIMIT 100";  // Fetch more records for filtering
 
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, playerUuid.toString());
@@ -210,8 +210,24 @@ class BalanceHistoryCommand implements org.bukkit.command.CommandExecutor {
                 return;
             }
 
-            sender.sendMessage("§6Balance history for §e" + playerName + "§6 (last 10):");
+            // Filter out consecutive records with the same balance
+            List<BalanceRecord> filteredRecords = new ArrayList<>();
+            double lastBalance = -1; // Initialize with impossible value
+
             for (BalanceRecord record : records) {
+                // Use epsilon comparison for floating point values
+                if (Math.abs(record.getBalance() - lastBalance) > 0.001) {
+                    filteredRecords.add(record);
+                    lastBalance = record.getBalance();
+                }
+            }
+
+            // Limit to last 10 changes
+            int endIndex = Math.min(filteredRecords.size(), 10);
+            List<BalanceRecord> lastChanges = filteredRecords.subList(0, endIndex);
+
+            sender.sendMessage("§6Balance changes for §e" + playerName + "§6 (last " + endIndex + " changes):");
+            for (BalanceRecord record : lastChanges) {
                 String time = new java.util.Date(record.getTimestamp()).toString();
                 sender.sendMessage("§7- §a" + time + "§f: §b$" + String.format("%.2f", record.getBalance()));
             }
