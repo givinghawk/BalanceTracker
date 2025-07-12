@@ -1,9 +1,10 @@
-# How often to record top players' balances (in seconds)
-topPlayersRecordInterval: 300
+# Enable detailed logging for debugging
+debug: false
 
-# How many top players to record
-topPlayersCount: 100
+# How often to check player balances (in seconds)
+balanceCheckInterval: 300
 
+# MySQL database configuration
 mysql:
   host: "localhost"
   port: 3306
